@@ -30,6 +30,11 @@ import numpy as np
 from bal_toolbox_qgis.algorithms import _algorithms
 from bal_toolbox_qgis.algorithms._bal_style import apply_bal_style
 from bal_toolbox_qgis.algorithms._help import HELP_URL
+from bal_toolbox_qgis.algorithms._qgis_io import (
+    _gdal_openable,
+    _materialise_raster,
+    raster_source_path,
+)
 from bal_toolbox_qgis.algorithms.bal_run import BalMethod1Algorithm
 from bal_toolbox_qgis.algorithms.reclassify import ReclassifyVegetationAlgorithm
 from bal_toolbox_qgis.provider import BalProcessingProvider
@@ -154,3 +159,89 @@ def test_apply_bal_style_sets_paletted_renderer(tmp_path: Path) -> None:
     assert layer.isValid()
     assert apply_bal_style(layer) is True
     assert isinstance(layer.renderer(), QgsPalettedRasterRenderer)
+
+
+def _write_small_geotiff(path: Path) -> None:
+    """Create a tiny valid single-band GeoTIFF at ``path``."""
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(str(path), 4, 4, 1, gdal.GDT_Int16)
+    dataset.SetGeoTransform((0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    dataset.SetProjection(srs.ExportToWkt())
+    dataset.GetRasterBand(1).WriteArray(np.ones((4, 4), dtype=np.int16))
+    dataset.FlushCache()
+
+
+def test_gdal_openable_true_for_real_file_false_for_junk(tmp_path: Path) -> None:
+    """``_gdal_openable`` accepts a real raster and quietly rejects nonsense."""
+    path = tmp_path / "ok.tif"
+    _write_small_geotiff(path)
+    assert _gdal_openable(str(path)) is True
+    assert _gdal_openable(str(tmp_path / "nope.tif")) is False
+    assert _gdal_openable("not a raster at all") is False
+
+
+def test_raster_source_path_returns_plain_file(tmp_path: Path) -> None:
+    """A plain file-backed raster is returned unchanged (fast path)."""
+    path = tmp_path / "veg.tif"
+    _write_small_geotiff(path)
+    layer = QgsRasterLayer(str(path), "veg")
+    assert layer.isValid()
+    returned = raster_source_path(layer)
+    assert Path(returned).exists()
+    assert _gdal_openable(str(Path(returned)))
+
+
+def test_raster_source_path_accepts_gdal_subdataset(tmp_path: Path) -> None:
+    """A GDAL descriptor (here a subdataset) is wrapped into an on-disk VRT.
+
+    A NetCDF file exposes its variable as a ``NETCDF:"file":var`` subdataset
+    descriptor -- the same shape of connection string a File Geodatabase
+    raster uses -- which is not a plain file on disk but is GDAL-openable.
+
+    The bare descriptor cannot be handed to the compute core: the core opens
+    rasters by path and first checks ``path.exists()``, which a descriptor
+    always fails ("Raster not found"). ``raster_source_path`` must therefore
+    return a *real, on-disk* path (a VRT wrapping the descriptor), which this
+    test asserts explicitly -- the property that regressed in 0.1.7.
+    """
+    nc_driver = gdal.GetDriverByName("netCDF")
+    if nc_driver is None:  # driver not built into this GDAL
+        pytest.skip("netCDF driver unavailable")
+    src = tmp_path / "grid.nc"
+    dataset = nc_driver.Create(str(src), 4, 4, 1, gdal.GDT_Float32)
+    dataset.GetRasterBand(1).WriteArray(np.ones((4, 4), dtype=np.float32))
+    dataset.FlushCache()
+    dataset = None
+
+    descriptor = f'NETCDF:"{src}":Band1'
+    assert not Path(descriptor).exists()
+    assert _gdal_openable(descriptor)
+    layer = QgsRasterLayer(descriptor, "grid", "gdal")
+    if not layer.isValid():
+        pytest.skip("QGIS could not load the NetCDF subdataset layer")
+    returned = raster_source_path(layer)
+    # The descriptor must have been wrapped, not returned verbatim.
+    assert returned != descriptor
+    # The core requires BOTH: the path exists on disk AND GDAL can open it.
+    assert Path(returned).exists()
+    assert _gdal_openable(str(Path(returned)))
+    # And it must read back as a real raster (a lazy VRT over the source).
+    reopened = gdal.Open(str(Path(returned)), gdal.GA_ReadOnly)
+    assert reopened is not None
+    assert reopened.RasterXSize == 4
+    assert reopened.RasterYSize == 4
+    reopened = None
+
+
+def test_materialise_raster_writes_geotiff(tmp_path: Path) -> None:
+    """The materialisation fallback yields a real, GDAL-openable GeoTIFF."""
+    path = tmp_path / "src.tif"
+    _write_small_geotiff(path)
+    layer = QgsRasterLayer(str(path), "src")
+    assert layer.isValid()
+    out = _materialise_raster(layer)
+    assert out.endswith(".tif")
+    assert Path(out).exists()
+    assert _gdal_openable(out)

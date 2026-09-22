@@ -4,6 +4,77 @@ All notable changes to the BAL Toolbox (AS 3959:2018) QGIS plugin are recorded
 here. The format follows [Keep a Changelog](https://keepachangelog.com/), and
 the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.10] - 2026-09-22
+
+### Fixed
+- A vegetation or DEM raster held inside an ESRI File Geodatabase (`.gdb`)
+  still failed to read after 0.1.9. That release wrapped the GDAL descriptor
+  in a VRT built with `gdal.Translate(..., "VRT")`, but for a geodatabase
+  source that produced a `.vrt` file GDAL then refused to reopen
+  (`RuntimeError: '...source.vrt' not recognized as being in a supported file
+  format`) — so the run advanced past the "Raster not found" guard only to
+  fail at the read itself. The VRT is now assembled by hand from the source's
+  size, projection, geotransform and per-band datatype/nodata (a new,
+  unit-tested `build_vrt_xml` in `algorithms/_raster_source.py`) and written
+  with a plain file write, which guarantees a well-formed document that starts
+  with `<VRTDataset` and is fully flushed before use. Each band references the
+  descriptor through `<SourceFilename relativeToVRT="0">`, which GDAL passes
+  verbatim to `GDALOpen`, so the geodatabase raster (or any GDAL-openable
+  subdataset) is read lazily — only the requested window, never the whole
+  national raster. As a final guard the written VRT is reopened with GDAL and,
+  if that fails, the layer is materialised instead of handing the core a file
+  it cannot read. The vendored compute core is unchanged.
+
+## [0.1.9] - 2026-09-22
+
+### Fixed
+- A vegetation or DEM raster held inside an ESRI File Geodatabase (`.gdb`)
+  failed with `Raster not found: OpenFileGDB:"...gdb":LAYER`, even though QGIS
+  could load it. Release 0.1.7 let the QGIS glue hand a GDAL *dataset
+  descriptor* (a File Geodatabase raster, a NetCDF/HDF subdataset, a
+  `/vsicurl/` path or a WCS descriptor) straight to the compute core, but the
+  core opens rasters by path and first checks the path *exists* — which a bare
+  descriptor never does. Such a descriptor is now wrapped in a tiny virtual
+  raster (`.vrt`) file: a real file the core can find and open that merely
+  references the source and reads it lazily, so only the pixel window the run
+  needs is read and a national raster is never copied in full. The vendored
+  compute core is unchanged; the decision lives in a new qgis-free module
+  (`algorithms/_raster_source.py`) covered by CI tests, and the QGIS-side test
+  now asserts the resolved path actually exists on disk.
+
+## [0.1.8] - 2026-09-22
+
+### Fixed
+- The "Use national SRTM DEM" option (and the underlying national-DEM code
+  path) failed with `RuntimeError: Malformed Result: ...ArcGIS Server
+  Error...http.400`. The Geoscience Australia service is a healthy OGC WCS,
+  but its ArcGIS server rejects the `GetCoverage` request GDAL's own WCS
+  driver constructs. The DEM window is now fetched with a direct WCS 1.0.0
+  `GetCoverage` KVP request (built in `balcore/_wcs_request.py`), downloaded
+  to a temporary GeoTIFF with `urllib`, validated, then read back through the
+  GDAL shim. The request window is snapped to whole SRTM cells and clamped to
+  the coverage's WGS84 extent; a disjoint AOI still raises a clear "does not
+  intersect the national DEM coverage" error, and an XML/HTML service
+  exception is surfaced as a readable message instead of a raw GDAL failure.
+  The returned `(data, RasterGrid)` contract and all downstream reprojection
+  maths are unchanged. New network-free unit tests
+  (`tests/test_wcs_request.py`) cover the request geometry and validation.
+
+## [0.1.7] - 2026-09-22
+
+### Changed
+- DEM and vegetation raster inputs now accept a much wider range of sources,
+  not just plain files on disk. A raster held inside an ESRI File Geodatabase
+  (`.gdb`), a GDAL subdataset (e.g. NetCDF/HDF), a `/vsicurl/` path or a WCS
+  XML descriptor is passed straight through to the compute core once it is
+  confirmed GDAL-openable. Anything else QGIS can render but GDAL cannot open
+  directly (an in-memory raster, some WMS/WCS layers) is transparently
+  exported to a temporary GeoTIFF via QGIS's own raster writer. This removes
+  the previous "no local file source that GDAL can read; export it to a
+  GeoTIFF first" failure for geodatabase rasters. (Vector inputs already
+  worked with any QGIS-readable source, including geodatabase feature
+  classes.)
+
 ## [0.1.6] - 2026-09-22
 
 ### Added

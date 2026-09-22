@@ -312,13 +312,13 @@ class BalMethod1Algorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(
                     "Provide a DEM raster, or tick 'Use national SRTM DEM'."
                 )
-            dem_path = Path(raster_source_path(dem_layer))
+            dem_path = Path(raster_source_path(dem_layer, feedback))
 
         fdi_value, fdi_spec = self._build_fdi(parameters, context, aoi)
 
         config = RunConfig(
             dem_path=dem_path,
-            vegetation_path=Path(raster_source_path(veg_layer)),
+            vegetation_path=Path(raster_source_path(veg_layer, feedback)),
             output_dir=output_dir,
             fdi=fdi_value,
             remap=remap,

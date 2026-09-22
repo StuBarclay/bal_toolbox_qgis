@@ -83,7 +83,7 @@ class AssignBalAlgorithm(QgsProcessingAlgorithm):
 
     def processAlgorithm(self, parameters, context, feedback) -> dict:
         bal_layer = self.parameterAsRasterLayer(parameters, self.BAL_RASTER, context)
-        bal_path = Path(raster_source_path(bal_layer))
+        bal_path = Path(raster_source_path(bal_layer, feedback))
         source = self.parameterAsSource(parameters, self.POLYGONS, context)
         if source is None:
             raise QgsProcessingException("A polygon layer is required.")

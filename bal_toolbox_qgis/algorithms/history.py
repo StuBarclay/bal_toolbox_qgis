@@ -125,7 +125,7 @@ class FireHistoryAlgorithm(QgsProcessingAlgorithm):
 
     def processAlgorithm(self, parameters, context, feedback) -> dict:
         bal_layer = self.parameterAsRasterLayer(parameters, self.BAL_RASTER, context)
-        bal_path = Path(raster_source_path(bal_layer))
+        bal_path = Path(raster_source_path(bal_layer, feedback))
         footprints = self.parameterAsSource(parameters, self.FOOTPRINTS, context)
         fire = self.parameterAsSource(parameters, self.FIRE_LAYER, context)
         if footprints is None or fire is None:
@@ -140,7 +140,9 @@ class FireHistoryAlgorithm(QgsProcessingAlgorithm):
 
         veg_layer = self.parameterAsRasterLayer(parameters, self.VEG_CLASS, context)
         veg_class_path = (
-            Path(raster_source_path(veg_layer)) if veg_layer is not None else None
+            Path(raster_source_path(veg_layer, feedback))
+            if veg_layer is not None
+            else None
         )
 
         with tempfile.TemporaryDirectory(prefix="bal_history_") as tmp:

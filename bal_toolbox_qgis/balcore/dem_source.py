@@ -9,10 +9,16 @@ requires. The continental coverage is never downloaded in full.
 
 Network note
 ------------
-``fetch_dem_window`` performs a live HTTP request to the GA service via
-GDAL's WCS driver. The request is isolated in this one function so the
-rest of the toolbox -- and the test suite -- can run without network
-access (tests mock this function).
+``fetch_dem_window`` performs a live HTTP request to the GA service: a
+WCS 1.0.0 ``GetCoverage`` request (built in
+:mod:`bal_toolbox_qgis.balcore._wcs_request`) is downloaded to a temporary
+GeoTIFF with :mod:`urllib`, then read back through the GDAL shim. GDAL's own
+WCS *driver* is deliberately not used: the GA ArcGIS server rejects the
+GetCoverage request GDAL builds for it (HTTP 400 "Malformed Result"), whereas
+a plain WCS 1.0.0 KVP GetCoverage succeeds. The request is isolated in this
+one function so the rest of the toolbox -- and the test suite -- can run
+without network access (tests mock this function, or exercise the pure
+request maths in ``_wcs_request`` directly).
 
 Service (verified): the GA "Digital Elevation Model (DEM) of Australia
 with 1 Second Grid" service, derived from the SRTM 1 Second product with
@@ -30,6 +36,13 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
+from bal_toolbox_qgis.balcore._wcs_request import (
+    SRTM_CELL_SIZE_DEG,
+    align_request_window,
+    build_getcoverage_url,
+    error_detail,
+    looks_like_tiff,
+)
 from bal_toolbox_qgis.balcore.raster import RasterGrid
 
 logger = logging.getLogger(__name__)
@@ -41,8 +54,8 @@ GA_SRTM_WCS_URL: Final[str] = (
 GA_SRTM_WCS_COVERAGE: Final[str] = "1"
 GA_SRTM_WCS_VERSION: Final[str] = "1.0.0"
 
-#: Native cell size of the SRTM 1-second product in degrees (~30 m).
-SRTM_CELL_SIZE_DEG: Final[float] = 1.0 / 3600.0
+# ``SRTM_CELL_SIZE_DEG`` is imported from ``_wcs_request`` above and remains
+# available as ``dem_source.SRTM_CELL_SIZE_DEG`` for backwards compatibility.
 
 #: Names recognised in the YAML ``dem`` field for the national WCS source.
 NATIONAL_DEM_KEYWORDS: Final[frozenset[str]] = frozenset(
@@ -255,83 +268,101 @@ def fetch_dem_window(
     else:
         geo_bounds = bounds
 
-    # Escape XML metacharacters (<, >, &) in the interpolated values so the
-    # descriptor is always well-formed, even if a service URL or coverage
-    # identifier ever contains one of them.
-    from xml.sax.saxutils import escape
-
-    wcs_xml = (
-        "<WCS_GDAL>"
-        f"<ServiceURL>{escape(service_url)}</ServiceURL>"
-        f"<CoverageName>{escape(coverage)}</CoverageName>"
-        f"<Version>{escape(GA_SRTM_WCS_VERSION)}</Version>"
-        "</WCS_GDAL>"
+    # Snap the AOI outward to whole SRTM cells and clamp to the coverage
+    # extent, then request exactly that window as a GeoTIFF over plain HTTP.
+    request_bounds, width, height = align_request_window(geo_bounds)
+    url = build_getcoverage_url(
+        service_url, coverage, GA_SRTM_WCS_VERSION, request_bounds, width, height
+    )
+    logger.info(
+        "Requesting DEM window %s (%d x %d px) from GA SRTM WCS",
+        request_bounds,
+        width,
+        height,
     )
 
-    logger.info("Requesting DEM window %s from GA SRTM WCS", geo_bounds)
-    # GDAL's WCS driver caches a DescribeCoverage (.DC.xml) next to the
-    # service descriptor, so the descriptor must be a real file in a
-    # writable directory rather than an inline XML string.
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        descriptor = Path(tmp_dir) / "dem_wcs.xml"
-        descriptor.write_text(wcs_xml, encoding="utf-8")
-        return _read_wcs_window(str(descriptor), geo_bounds)
+        tif_path = Path(tmp_dir) / "dem_window.tif"
+        _download_coverage(url, tif_path)
+        return _read_geotiff_window(str(tif_path))
 
 
-def _read_wcs_window(
-    descriptor_path: str,
-    geo_bounds: tuple[float, float, float, float],
-) -> tuple[NDArray[np.float64], RasterGrid]:
-    """Open a GDAL WCS descriptor and read the AOI window.
+def _download_coverage(url: str, out_path: Path) -> None:
+    """Download a WCS ``GetCoverage`` GeoTIFF to ``out_path``.
 
     Args:
-        descriptor_path: Path to a GDAL ``<WCS_GDAL>`` descriptor file.
-        geo_bounds: AOI bounds in the coverage CRS (geographic degrees).
-
-    Returns:
-        ``(data, grid)`` for the covering window.
+        url: The fully-formed WCS 1.0.0 ``GetCoverage`` request URL.
+        out_path: Destination file for the returned GeoTIFF bytes.
 
     Raises:
-        ValueError: If the AOI does not intersect the coverage.
-        RuntimeError: If the WCS request fails.
+        RuntimeError: If the service is unreachable, returns an HTTP error, or
+            responds with something other than a GeoTIFF (e.g. an XML/HTML
+            ``ServiceExceptionReport``).
+    """
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "bal_toolbox_qgis WCS client"}
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=120, context=ssl.create_default_context()
+        ) as response:
+            payload: bytes = response.read()
+    except urllib.error.HTTPError as err:  # pragma: no cover - network/service
+        body = error_detail(err.read())
+        message = f"National DEM WCS request failed (HTTP {err.code})."
+        raise RuntimeError(f"{message} {body}".strip()) from err
+    except (urllib.error.URLError, OSError) as err:  # pragma: no cover - network
+        raise RuntimeError(
+            f"Could not reach the national DEM WCS service: {err}"
+        ) from err
+
+    if not looks_like_tiff(payload):  # pragma: no cover - service error path
+        raise RuntimeError(
+            "The national DEM WCS did not return a GeoTIFF. "
+            f"Service response: {error_detail(payload)}"
+        )
+    out_path.write_bytes(payload)
+
+
+def _read_geotiff_window(
+    path: str,
+) -> tuple[NDArray[np.float64], RasterGrid]:
+    """Read a downloaded DEM-window GeoTIFF into ``(data, grid)``.
+
+    Args:
+        path: Path to a GeoTIFF written by :func:`_download_coverage`.
+
+    Returns:
+        ``(data, grid)`` for the window, in the file's native (geographic) CRS.
+
+    Raises:
+        RuntimeError: If the file cannot be read as a raster.
     """
     from bal_toolbox_qgis.balcore import _rio as rasterio
     from bal_toolbox_qgis.balcore._rio.errors import RasterioError
-    from bal_toolbox_qgis.balcore._rio.windows import from_bounds
 
-    from bal_toolbox_qgis.balcore.raster import (
-        _apply_source_nodata,
-        _clamp_window,
-        _cover_window,
-    )
+    from bal_toolbox_qgis.balcore.raster import _apply_source_nodata
 
     try:
-        with rasterio.open(descriptor_path) as src:
-            window = from_bounds(*geo_bounds, transform=src.transform)
-            window = _cover_window(window)
-            read_window = _clamp_window(window, src.width, src.height)
-            if read_window is None:
-                raise ValueError(
-                    "Area of interest does not intersect the national DEM "
-                    "coverage; check the AOI bounds and CRS."
-                )
-            data = src.read(1, window=read_window).astype(np.float64)
+        with rasterio.open(path) as src:
+            data = src.read(1).astype(np.float64)
             _apply_source_nodata(data, src.nodata)
-            transform_w = src.window_transform(read_window)
             grid = RasterGrid(
-                transform=transform_w,
+                transform=src.transform,
                 crs=src.crs,
                 pixel_width=abs(src.transform.a),
                 pixel_height=abs(src.transform.e),
-                shape=(int(read_window.height), int(read_window.width)),
+                shape=(int(src.height), int(src.width)),
             )
-    except ValueError:
-        raise
-    except (RasterioError, OSError) as err:  # pragma: no cover - network/service
+    except (RasterioError, OSError) as err:  # pragma: no cover - service/io
         raise RuntimeError(
-            f"Failed to fetch the national DEM from the WCS service: {err}"
+            f"Failed to read the national DEM window returned by the WCS: {err}"
         ) from err
     return data, grid
 

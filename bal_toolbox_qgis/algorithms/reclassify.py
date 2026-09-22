@@ -169,7 +169,7 @@ class ReclassifyVegetationAlgorithm(QgsProcessingAlgorithm):
         veg_layer = self.parameterAsRasterLayer(parameters, self.INPUT, context)
         if veg_layer is None:
             raise QgsProcessingException("A vegetation raster is required.")
-        veg_path = Path(raster_source_path(veg_layer))
+        veg_path = Path(raster_source_path(veg_layer, feedback))
 
         remap = self._resolve_rules(parameters, context, feedback)
         feedback.pushInfo(f"Reclassifying {veg_path.name} with {len(remap)} rule(s).")

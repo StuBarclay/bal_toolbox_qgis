@@ -4,7 +4,7 @@ qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 description=Bushfire Attack Level (BAL) assessment to AS 3959:2018 Method 1 (and experimental Method 2), plus BAL-to-building assignment and fire-history / fuel-recovery analysis.
 about=Computes the Bushfire Attack Level over an area of interest from a digital elevation model and a vegetation raster using the prescriptive Method 1 separation-distance tables of AS 3959:2018 "Construction of buildings in bushfire-prone areas". Also provides an experimental radiant-heat-flux Method 2, assignment of BAL ratings to building/parcel polygons, and a fire-history and fuel-recovery analysis. All raster and vector operations use GDAL/OGR, which are installed with QGIS, so no extra Python packages are required. Not a substitute for a site assessment by a qualified bushfire practitioner.
-version=0.1.6
+version=0.1.10
 author=Stuart Barclay
 email=stu_barclay@hotmail.com
 tracker=https://github.com/StuBarclay/bal_toolbox_qgis/issues
@@ -17,6 +17,10 @@ deprecated=False
 hasProcessingProvider=yes
 tags=bushfire,bal,as3959,fire,hazard,raster,australia,vegetation,dem
 changelog=
+    0.1.10 - Actually reads a DEM or vegetation raster held inside a File Geodatabase (.gdb). The 0.1.9 wrapper built its virtual raster (VRT) with gdal.Translate, which for a geodatabase source wrote a file GDAL then refused to reopen ("not recognized as being in a supported file format"). The VRT is now assembled by hand and verified to reopen before use, so the geodatabase raster is read (only the needed window; a national raster is never copied in full).
+    0.1.9 - Wrapped a DEM or vegetation raster held inside a File Geodatabase (.gdb) in a virtual raster (VRT) so the compute core could open it. (Superseded by 0.1.10, which fixes the VRT that could not be reopened.)
+    0.1.8 - Fixed the "Use national SRTM DEM" option, which failed with an HTTP 400 "Malformed Result" error. The DEM window is now fetched with a direct WCS 1.0.0 GetCoverage request instead of GDAL's WCS driver, which the Geoscience Australia server rejects.
+    0.1.7 - DEM and vegetation inputs now read from File Geodatabase (.gdb) rasters, GDAL subdatasets and other GDAL-openable sources, not just plain files; anything else QGIS can read is exported to a temporary GeoTIFF automatically.
     0.1.6 - Live progress and cancellation during the eight-direction BAL search; the dialog remembers your last choices; save and recall named custom-remap presets; QGIS-side glue tests.
     0.1.5 - Max-BAL output loads pre-styled with the AS 3959 BAL palette; real repository/contact metadata; changelog added; removed dead scaffold.
     0.1.4 - Custom vegetation remaps (editable table / CSV / passthrough) on the BAL tool plus a standalone "Reclassify vegetation" helper.
