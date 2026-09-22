@@ -35,6 +35,9 @@ the project uses [Semantic Versioning](https://semver.org/).
 - The main BAL algorithm now declares its threading behaviour explicitly via
   `flags()`; threading stays enabled so the progress bar and cancel button
   remain live.
+- Marked as a stable (non-experimental) release: `experimental=False` in
+  `metadata.txt`, so the QGIS Plugin Manager lists it without the experimental
+  filter.
 
 ## [0.1.5] - 2026-09-22
 
