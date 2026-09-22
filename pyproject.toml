@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bal-toolbox-qgis"
+version = "0.1.6"
+description = "QGIS plugin: AS 3959:2018 Method 1 Bushfire Attack Level (BAL) toolbox"
+readme = "README.md"
+# The vendored compute core uses ``@dataclass(slots=True)`` and
+# ``zip(..., strict=True)`` -- both Python 3.10+ features -- so 3.10 is the
+# true floor (modern QGIS ships 3.9-3.12; 3.28+/3.34 LTR are on 3.10+).
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Stuart Barclay" }]
+keywords = ["bushfire", "BAL", "AS3959", "GIS", "raster", "qgis", "processing"]
+# No runtime dependencies: the plugin uses only numpy and GDAL/OGR/OSR,
+# both of which ship inside QGIS. The vendored ``balcore`` package rewrites
+# all rasterio/fiona I/O against ``osgeo`` so nothing extra is installed.
+dependencies = []
+
+[project.optional-dependencies]
+# Development / CI only. rasterio + affine are used solely to test that the
+# vendored ``_rio`` GDAL shim behaves identically to real rasterio; they are
+# never imported by the plugin at runtime.
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy==1.11.2",
+    "types-PyYAML>=6.0",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "rasterio>=1.4,<1.5",
+    "affine>=2.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["bal_toolbox_qgis"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["bal_toolbox_qgis", "tests"]
+# The vendored core (``balcore``) mirrors the upstream bal_toolbox_2018 project;
+# only its import lines were rewritten (rasterio/fiona -> the bundled ``_rio``/
+# ``_fiona`` GDAL shims). That mechanical rewrite is the sole source of style
+# drift there (import ordering, a few lengthened lines), so lint the plugin glue
+# we actually author -- not the vendored core. mypy still type-checks all of it.
+extend-exclude = ["bal_toolbox_qgis/balcore"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The QGIS plugin API mandates camelCase method and argument names
+# (initAlgorithm, processAlgorithm, displayName, reportError(fatalError=...),
+# ...). These overrides cannot be renamed, so exempt the QGIS-facing glue
+# from the pep8-naming checks; the vendored core is unaffected.
+"bal_toolbox_qgis/plugin.py" = ["N802"]
+"bal_toolbox_qgis/provider.py" = ["N802"]
+"bal_toolbox_qgis/algorithms/*.py" = ["N802", "N803"]
+"bal_toolbox_qgis/gui/*.py" = ["N802", "N803"]
+# The equivalence test aliases genuine rasterio classes with a ``Rio`` prefix
+# (RioCRS, RioMergeAlg, RioResampling) to sit beside the shim's own names; the
+# upstream class names are constants, so exempt this file from N811.
+"tests/test_rio_shim_equivalence.py" = ["N811"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["bal_toolbox_qgis", "tests"]
+explicit_package_bases = true
+# QGIS's own Python API (qgis.*, PyQt) is not installed in CI; the compute
+# core and its GDAL shim are the type-checked surface.
+[[tool.mypy.overrides]]
+module = ["rasterio.*", "scipy.*", "fiona.*", "osgeo.*", "qgis.*", "processing.*"]
+ignore_missing_imports = true
+# QGIS ships no type stubs, so its Python API resolves to ``Any`` in CI. The
+# qgis-facing glue must subclass those ``Any`` base classes and implement
+# QGIS-mandated override signatures that strict mode cannot satisfy. Relax only
+# those structurally-impossible rules for the glue -- real bugs (bad
+# assignments, missing attributes) are still caught, and the pure compute core
+# (balcore + the GDAL shims) stays fully strict.
+[[tool.mypy.overrides]]
+module = [
+    "bal_toolbox_qgis",
+    "bal_toolbox_qgis.plugin",
+    "bal_toolbox_qgis.provider",
+    "bal_toolbox_qgis.algorithms.*",
+    "bal_toolbox_qgis.gui.*",
+]
+disallow_subclassing_any = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["."]
