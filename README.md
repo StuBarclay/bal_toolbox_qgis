@@ -6,14 +6,11 @@ buildings in bushfire-prone areas*, plus an experimental radiant-heat-flux
 Method 2, assignment of BAL ratings to building/parcel polygons, and a
 fire-history / fuel-recovery analysis.
 
-It is a packaging of the standalone `bal_toolbox` project as a native QGIS
-plugin. The numerical core is reused **unchanged**; only the file I/O layer is
-rewritten against GDAL/OGR/OSR, which ship inside QGIS. **No extra Python
-packages are installed** — the plugin has no `rasterio`, `fiona` or `scipy`
+**No extra Python packages are installed** — the plugin has no `rasterio`, `fiona` or `scipy`
 runtime dependency.
 
 > This tool is a decision aid, not a substitute for a site assessment by a
-> qualified bushfire practitioner. Table 2.1 FDI values are jurisdictional
+> qualified bushfire practitioner. AS3959 (2018) Table 2.1 FDI values are jurisdictional
 > design values and Method 2 is experimental and not yet verified against the
 > published tables. Confirm any FDI with the relevant authority.
 
@@ -21,7 +18,7 @@ runtime dependency.
 
 The plugin adds a **Processing provider** ("BAL Toolbox (AS 3959:2018)") with
 six algorithms, and a **Plugins → BAL Toolbox** menu item / toolbar button
-that opens a friendly dialog for the common case. The dialog remembers your
+that opens a dialog for the common case. The dialog remembers your
 last-used choices between sessions.
 
 Processing algorithms:
